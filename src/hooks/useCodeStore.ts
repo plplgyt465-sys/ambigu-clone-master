@@ -271,8 +271,27 @@ export function useCodeStore() {
     }
   }, [applyFileOperations]);
 
-  const autoFixError = useCallback(async (errorMsg: string) => {
-    const fixPrompt = `There is an error in the code:\n\n${errorMsg}\n\nFix the code and return the full corrected files using [FILE:filename.ext] blocks only. IMPORTANT: Do not escape normal code characters with markdown backslashes.`;
+  const autoFixError = useCallback(async (errorDetails: { file: string; line: number | null; column: number | null; message: string; errorType: string; codeSnippet: string }, allFiles: CodeFile[]) => {
+    let fixPrompt = `🔧 AUTO-FIX REQUEST\n\n`;
+    fixPrompt += `❌ Error Type: ${errorDetails.errorType}\n`;
+    if (errorDetails.file) fixPrompt += `📁 File: ${errorDetails.file}\n`;
+    if (errorDetails.line) fixPrompt += `📍 Line: ${errorDetails.line}${errorDetails.column ? `, Column: ${errorDetails.column}` : ''}\n`;
+    fixPrompt += `💬 Error Message: ${errorDetails.message}\n`;
+    
+    if (errorDetails.codeSnippet) {
+      fixPrompt += `\n--- Code around the error ---\n${errorDetails.codeSnippet}\n--- End code context ---\n`;
+    }
+
+    // Include the full content of the errored file for context
+    if (errorDetails.file) {
+      const errorFile = allFiles.find(f => f.name === errorDetails.file);
+      if (errorFile) {
+        fixPrompt += `\n--- Full content of ${errorDetails.file} ---\n${errorFile.content}\n--- End full content ---\n`;
+      }
+    }
+
+    fixPrompt += `\nFix this ${errorDetails.errorType} error and return the full corrected files using [FILE:filename.ext] blocks. Focus on the specific error location. IMPORTANT: Do not escape normal code characters with markdown backslashes.`;
+    
     await sendMessage(fixPrompt);
   }, [sendMessage]);
 

@@ -1,29 +1,108 @@
 import { useMemo, useState, useEffect, useRef, useCallback } from 'react';
-import { Monitor, RefreshCw, Wrench } from 'lucide-react';
+import { Monitor, RefreshCw, Wrench, AlertTriangle } from 'lucide-react';
 import type { CodeFile } from '@/hooks/useCodeStore';
+
+export interface ErrorDetails {
+  file: string;
+  line: number | null;
+  column: number | null;
+  message: string;
+  errorType: string;
+  codeSnippet: string;
+}
 
 interface LivePreviewProps {
   files: CodeFile[];
   onError?: (error: string) => void;
-  onAutoFix?: (errorMsg: string) => void;
+  onAutoFix?: (errorDetails: ErrorDetails, allFiles: CodeFile[]) => void;
   isFixing?: boolean;
 }
 
 const IFRAME_RUNTIME = `
 (function() {
   var hasError = false;
-  function reportError(file, msg) {
-    hasError = true;
-    var display = file ? "Error in " + file + ":\\n" + msg : "Error:\\n" + msg;
-    var el = document.getElementById("root");
-    if (el) el.innerHTML = '<pre style="color:#f87171;padding:1rem;font-size:13px;white-space:pre-wrap">' + display.replace(/</g,'&lt;') + '</pre>';
-    window.parent.postMessage({ type: "preview-error", message: display, file: file }, "*");
-  }
-  window.onerror = function(msg) { reportError("", String(msg)); };
-
   var modules = window.__MODULES__;
   var entryName = window.__ENTRY__;
   var cache = {};
+
+  function extractLineInfo(msg, file) {
+    var line = null, column = null, errorType = "RuntimeError";
+    
+    // Babel SyntaxError: "file.tsx: ... (line:col)"
+    var babelMatch = msg.match(/^([^:]+):\\s*(.+?)\\s*\\((\\d+):(\\d+)\\)/);
+    if (babelMatch) {
+      file = file || babelMatch[1];
+      line = parseInt(babelMatch[3], 10);
+      column = parseInt(babelMatch[4], 10);
+      errorType = "SyntaxError";
+    }
+    
+    // Generic "at line X" or "line X"
+    if (!line) {
+      var lineMatch = msg.match(/(?:at\\s+)?line\\s+(\\d+)/i);
+      if (lineMatch) line = parseInt(lineMatch[1], 10);
+    }
+    
+    // "SyntaxError:", "TypeError:", "ReferenceError:" etc.
+    var typeMatch = msg.match(/^(\\w*Error):/);
+    if (typeMatch) errorType = typeMatch[1];
+    
+    // Babel "Unexpected token" => SyntaxError
+    if (msg.indexOf("Unexpected token") >= 0) errorType = "SyntaxError";
+    if (msg.indexOf("is not defined") >= 0) errorType = "ReferenceError";
+    if (msg.indexOf("is not a function") >= 0) errorType = "TypeError";
+    if (msg.indexOf("Cannot read prop") >= 0) errorType = "TypeError";
+    
+    return { line: line, column: column, errorType: errorType };
+  }
+
+  function getCodeSnippet(file, line) {
+    if (!file || !line || !modules[file]) return "";
+    var lines = modules[file].split("\\n");
+    var start = Math.max(0, line - 3);
+    var end = Math.min(lines.length, line + 2);
+    var snippet = "";
+    for (var i = start; i < end; i++) {
+      var marker = (i + 1 === line) ? " >> " : "    ";
+      snippet += marker + (i + 1) + " | " + lines[i] + "\\n";
+    }
+    return snippet;
+  }
+
+  function reportError(file, msg) {
+    hasError = true;
+    var info = extractLineInfo(msg, file);
+    var snippet = getCodeSnippet(file, info.line);
+    
+    var display = "";
+    if (file) display += "📁 File: " + file + "\\n";
+    if (info.errorType) display += "❌ Type: " + info.errorType + "\\n";
+    if (info.line) display += "📍 Line: " + info.line + (info.column ? ", Column: " + info.column : "") + "\\n";
+    display += "💬 " + msg + "\\n";
+    if (snippet) display += "\\n--- Code Context ---\\n" + snippet;
+    
+    var el = document.getElementById("root");
+    if (el) el.innerHTML = '<pre style="color:#f87171;padding:1rem;font-size:12px;white-space:pre-wrap;font-family:monospace;background:#1a1a2e;line-height:1.5">' + display.replace(/</g,'&lt;') + '</pre>';
+    
+    window.parent.postMessage({
+      type: "preview-error",
+      message: msg,
+      file: file || "",
+      line: info.line,
+      column: info.column,
+      errorType: info.errorType,
+      codeSnippet: snippet
+    }, "*");
+  }
+
+  window.onerror = function(msg, src, lineNo) {
+    var file = "";
+    if (lineNo) {
+      reportError(file, String(msg));
+    } else {
+      reportError("", String(msg));
+    }
+  };
 
   function resolve(name) {
     var n = name.replace(/^\\.\\/?/, "");
@@ -76,8 +155,15 @@ const IFRAME_RUNTIME = `
       var transformed;
       try { transformed = Babel.transform(code, opts).code; }
       catch(e2) {
-        code = code.replace(/\\\\([^\\\\])/g, "$1");
-        transformed = Babel.transform(code, opts).code;
+        // If Babel fails, try stripping extra escapes
+        try {
+          code = code.replace(/\\\\([^\\\\])/g, "$1");
+          transformed = Babel.transform(code, opts).code;
+        } catch(e3) {
+          // Report with original Babel error which has line info
+          reportError(r, e2.message);
+          return mod.exports;
+        }
       }
 
       var pre = "";
@@ -125,7 +211,7 @@ const IFRAME_RUNTIME = `
 
 const LivePreview = ({ files, onError, onAutoFix, isFixing }: LivePreviewProps) => {
   const [refreshKey, setRefreshKey] = useState(0);
-  const [previewError, setPreviewError] = useState<string | null>(null);
+  const [previewError, setPreviewError] = useState<ErrorDetails | null>(null);
   const iframeRef = useRef<HTMLIFrameElement>(null);
 
   const filesDep = files.map((f) => `${f.name}::${f.content}`).join('|||');
@@ -133,8 +219,16 @@ const LivePreview = ({ files, onError, onAutoFix, isFixing }: LivePreviewProps) 
   useEffect(() => {
     const handler = (event: MessageEvent) => {
       if (event.data?.type === 'preview-error') {
-        setPreviewError(event.data.message || 'Unknown error');
-        onError?.(event.data.message);
+        const details: ErrorDetails = {
+          file: event.data.file || '',
+          line: event.data.line || null,
+          column: event.data.column || null,
+          message: event.data.message || 'Unknown error',
+          errorType: event.data.errorType || 'Error',
+          codeSnippet: event.data.codeSnippet || '',
+        };
+        setPreviewError(details);
+        onError?.(details.message);
       } else if (event.data?.type === 'preview-success') {
         setPreviewError(null);
       }
@@ -146,8 +240,8 @@ const LivePreview = ({ files, onError, onAutoFix, isFixing }: LivePreviewProps) 
   useEffect(() => { setPreviewError(null); }, [filesDep]);
 
   const handleAutoFix = useCallback(() => {
-    if (previewError && onAutoFix) onAutoFix(previewError);
-  }, [previewError, onAutoFix]);
+    if (previewError && onAutoFix) onAutoFix(previewError, files);
+  }, [previewError, onAutoFix, files]);
 
   const srcDoc = useMemo(() => {
     const cssFiles = files.filter((f) => f.name.endsWith('.css'));
@@ -202,6 +296,16 @@ const LivePreview = ({ files, onError, onAutoFix, isFixing }: LivePreviewProps) 
         <div className="flex items-center gap-2">
           <Monitor className="w-4 h-4 text-primary" />
           <span className="text-xs font-medium text-foreground">Live Preview</span>
+          {previewError && (
+            <div className="flex items-center gap-1 text-[10px] text-destructive">
+              <AlertTriangle className="w-3 h-3" />
+              <span className="font-mono">
+                {previewError.errorType}
+                {previewError.file ? ` in ${previewError.file}` : ''}
+                {previewError.line ? `:${previewError.line}` : ''}
+              </span>
+            </div>
+          )}
         </div>
         <div className="flex items-center gap-1">
           {previewError && onAutoFix && (

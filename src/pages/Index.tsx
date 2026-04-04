@@ -4,6 +4,7 @@ import ChatPanel from '@/components/ChatPanel';
 import FileTabs from '@/components/FileTabs';
 import CodeEditor from '@/components/CodeEditor';
 import LivePreview from '@/components/LivePreview';
+import type { ErrorDetails } from '@/components/LivePreview';
 import { useCodeStore } from '@/hooks/useCodeStore';
 
 const Index = () => {
