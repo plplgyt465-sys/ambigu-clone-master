@@ -95,13 +95,24 @@ const IFRAME_RUNTIME = `
     }, "*");
   }
 
-  window.onerror = function(msg, src, lineNo) {
-    var file = "";
-    if (lineNo) {
-      reportError(file, String(msg));
-    } else {
-      reportError("", String(msg));
+  window.onerror = function(msg, src, lineNo, colNo, errObj) {
+    var message = String(msg);
+    // "Script error." is a generic cross-origin error with no useful info — skip it
+    if (message === "Script error." || message === "Script error") {
+      // Try to get real message from the error object
+      if (errObj && errObj.message) {
+        message = errObj.message;
+      } else {
+        return; // ignore completely — no useful info to report
+      }
     }
+    reportError("", message);
+  };
+
+  // Catch unhandled promise rejections too
+  window.onunhandledrejection = function(event) {
+    var msg = event.reason ? (event.reason.message || String(event.reason)) : "Unhandled promise rejection";
+    reportError("", msg);
   };
 
   function resolve(name) {
@@ -279,9 +290,9 @@ const LivePreview = ({ files, onError, onAutoFix, isFixing }: LivePreviewProps) 
     return '<!DOCTYPE html>'
       + '<html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">'
       + '<style>' + allStyles + '</style>'
-      + '<script src="https://unpkg.com/react@18/umd/react.development.js"><\/script>'
-      + '<script src="https://unpkg.com/react-dom@18/umd/react-dom.development.js"><\/script>'
-      + '<script src="https://unpkg.com/@babel/standalone/babel.min.js"><\/script>'
+      + '<script crossorigin="anonymous" src="https://unpkg.com/react@18/umd/react.development.js"><\/script>'
+      + '<script crossorigin="anonymous" src="https://unpkg.com/react-dom@18/umd/react-dom.development.js"><\/script>'
+      + '<script crossorigin="anonymous" src="https://unpkg.com/@babel/standalone/babel.min.js"><\/script>'
       + '</head><body><div id="root"></div>'
       + '<script>' + dataScript + '<\/script>'
       + '<script>' + IFRAME_RUNTIME + '<\/script>'
