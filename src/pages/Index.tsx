@@ -20,6 +20,9 @@ const Index = () => {
     sendMessage,
     isAiLoading,
     autoFixError,
+    multiAgentMode,
+    setMultiAgentMode,
+    agentProgress,
   } = useCodeStore();
 
   const [chatOpen, setChatOpen] = useState(true);
@@ -29,7 +32,14 @@ const Index = () => {
       {/* Chat Sidebar */}
       {chatOpen && (
         <div className="w-80 min-w-[280px] shrink-0">
-          <ChatPanel messages={chatMessages} onSendMessage={sendMessage} isLoading={isAiLoading} />
+          <ChatPanel
+            messages={chatMessages}
+            onSendMessage={sendMessage}
+            isLoading={isAiLoading}
+            multiAgentMode={multiAgentMode}
+            onToggleMultiAgent={setMultiAgentMode}
+            agentProgress={agentProgress}
+          />
         </div>
       )}
 

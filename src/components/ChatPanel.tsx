@@ -1,14 +1,38 @@
 import { useState, useRef, useEffect } from 'react';
-import { Send, Bot, User, Sparkles, Loader2, FilePlus, FileEdit } from 'lucide-react';
-import type { ChatMessage } from '@/hooks/useCodeStore';
+import { Send, Bot, User, Sparkles, Loader2, FilePlus, FileEdit, Cpu, Users } from 'lucide-react';
+import type { ChatMessage, AgentLog } from '@/hooks/useCodeStore';
 
 interface ChatPanelProps {
   messages: ChatMessage[];
   onSendMessage: (content: string) => void;
   isLoading?: boolean;
+  multiAgentMode?: boolean;
+  onToggleMultiAgent?: (enabled: boolean) => void;
+  agentProgress?: string | null;
 }
 
-const ChatPanel = ({ messages, onSendMessage, isLoading }: ChatPanelProps) => {
+const AgentLogsDisplay = ({ logs }: { logs: AgentLog[] }) => (
+  <div className="mt-2 space-y-1 border-t border-border/30 pt-2">
+    <div className="flex items-center gap-1 text-[10px] text-muted-foreground font-semibold uppercase tracking-wider mb-1">
+      <Users className="w-3 h-3" />
+      Agent Activity
+    </div>
+    {logs.map((log, i) => (
+      <div key={i} className="flex items-center gap-1.5 text-xs text-muted-foreground bg-secondary/30 rounded px-2 py-1">
+        <span>{log.status === 'success' ? '✅' : '❌'}</span>
+        <span className="font-medium text-foreground/80">{log.agent}</span>
+        <span className="text-[10px]">— {log.message}</span>
+        {log.filesCreated && log.filesCreated.length > 0 && (
+          <span className="ml-auto text-[10px] font-mono text-primary/70">
+            {log.filesCreated.join(', ')}
+          </span>
+        )}
+      </div>
+    ))}
+  </div>
+);
+
+const ChatPanel = ({ messages, onSendMessage, isLoading, multiAgentMode, onToggleMultiAgent, agentProgress }: ChatPanelProps) => {
   const [input, setInput] = useState('');
   const bottomRef = useRef<HTMLDivElement>(null);
 
@@ -28,7 +52,28 @@ const ChatPanel = ({ messages, onSendMessage, isLoading }: ChatPanelProps) => {
       <div className="flex items-center gap-2 px-4 py-3 border-b border-border">
         <Sparkles className="w-4 h-4 text-primary" />
         <span className="text-sm font-semibold text-foreground">AI Chat</span>
-        <span className="text-xs text-muted-foreground">Assistant</span>
+        {/* Multi-agent toggle */}
+        <button
+          onClick={() => onToggleMultiAgent?.(!multiAgentMode)}
+          className={`ml-auto flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-medium transition-colors ${
+            multiAgentMode
+              ? 'bg-primary/20 text-primary border border-primary/30'
+              : 'bg-secondary text-muted-foreground border border-border'
+          }`}
+          title={multiAgentMode ? '10 Agents Mode (click to switch to single)' : 'Single Agent (click to switch to multi)'}
+        >
+          {multiAgentMode ? (
+            <>
+              <Users className="w-3 h-3" />
+              <span>10 Agents</span>
+            </>
+          ) : (
+            <>
+              <Cpu className="w-3 h-3" />
+              <span>Single</span>
+            </>
+          )}
+        </button>
       </div>
 
       {/* Messages */}
@@ -58,14 +103,19 @@ const ChatPanel = ({ messages, onSendMessage, isLoading }: ChatPanelProps) => {
                     ))}
                   </div>
                 )}
+                {msg.agentLogs && msg.agentLogs.length > 0 && (
+                  <AgentLogsDisplay logs={msg.agentLogs} />
+                )}
               </div>
             </div>
           </div>
         ))}
         {isLoading && (
-          <div className="flex items-center gap-2 text-muted-foreground text-sm">
-            <Loader2 className="w-4 h-4 animate-spin" />
-            <span>Thinking...</span>
+          <div className="flex flex-col gap-1.5 text-muted-foreground text-sm">
+            <div className="flex items-center gap-2">
+              <Loader2 className="w-4 h-4 animate-spin" />
+              <span>{agentProgress || 'Thinking...'}</span>
+            </div>
           </div>
         )}
         <div ref={bottomRef} />
@@ -79,7 +129,7 @@ const ChatPanel = ({ messages, onSendMessage, isLoading }: ChatPanelProps) => {
             value={input}
             onChange={(e) => setInput(e.target.value)}
             onKeyDown={(e) => e.key === 'Enter' && handleSend()}
-            placeholder="Ask to create code, edit a file..."
+            placeholder={multiAgentMode ? "Ask 10 agents to build something..." : "Ask to create code, edit a file..."}
             className="flex-1 bg-transparent text-sm text-foreground placeholder:text-muted-foreground outline-none"
             disabled={isLoading}
           />

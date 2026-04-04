@@ -14,12 +14,20 @@ export interface FileOperation {
   type: 'create' | 'update';
 }
 
+export interface AgentLog {
+  agent: string;
+  status: string;
+  message: string;
+  filesCreated?: string[];
+}
+
 export interface ChatMessage {
   id: string;
   role: 'user' | 'ai';
   content: string;
   timestamp: Date;
   fileOps?: FileOperation[];
+  agentLogs?: AgentLog[];
 }
 
 const defaultAppTsx = `import React, { useState } from 'react';
@@ -141,15 +149,32 @@ function parseFileOperations(reply: string): { text: string; fileOps: FileOperat
   return { text, fileOps };
 }
 
+// Detect if a prompt is complex enough to warrant multi-agent mode
+function shouldUseMultiAgent(prompt: string): boolean {
+  const multiAgentKeywords = [
+    'create', 'build', 'make', 'أنشئ', 'اصنع', 'ابني',
+    'website', 'app', 'application', 'موقع', 'تطبيق',
+    'store', 'shop', 'متجر', 'landing', 'portfolio',
+    'dashboard', 'لوحة', 'blog', 'مدونة',
+    'e-commerce', 'ecommerce', 'todo', 'chat',
+    'project', 'مشروع', 'page', 'صفحة',
+  ];
+  const lower = prompt.toLowerCase();
+  const matchCount = multiAgentKeywords.filter(k => lower.includes(k)).length;
+  return matchCount >= 2;
+}
+
 export function useCodeStore() {
   const [files, setFiles] = useState<CodeFile[]>(defaultFiles);
   const [activeFileId, setActiveFileId] = useState(defaultFiles[0].id);
   const [isAiLoading, setIsAiLoading] = useState(false);
+  const [multiAgentMode, setMultiAgentMode] = useState(true);
+  const [agentProgress, setAgentProgress] = useState<string | null>(null);
   const [chatMessages, setChatMessages] = useState<ChatMessage[]>([
     {
       id: '1',
       role: 'ai',
-      content: 'Welcome! 👋 I\'m your AI assistant. I can create files, edit code, or build entire projects from scratch. Try asking something like "Create a calculator app"!',
+      content: '👋 Welcome! I\'m powered by **10 AI agents** working together!\n\n🤖 **Agent 0** - Orchestrator\n🔧 **Agent 1** - Setup\n🎨 **Agent 2** - Styles\n📊 **Agent 3** - State\n🧩 **Agent 4** - Shared Components\n🏠 **Agent 5** - Home Page\n🛍️ **Agent 6** - Products\n🛒 **Agent 7** - Cart\n📞 **Agent 8** - Contact\n💾 **Agent 9** - Data\n\nTry asking: "Build an e-commerce store" or "Create a portfolio website"!',
       timestamp: new Date(),
     },
   ]);
@@ -226,6 +251,7 @@ export function useCodeStore() {
     };
     setChatMessages((prev) => [...prev, userMsg]);
     setIsAiLoading(true);
+    setAgentProgress(null);
 
     try {
       let currentFiles: CodeFile[] = [];
@@ -235,8 +261,16 @@ export function useCodeStore() {
       });
       const filesPayload = currentFiles.map((f) => ({ name: f.name, content: f.content }));
 
-      const { data, error } = await supabase.functions.invoke('gemini-chat', {
-        body: { prompt: content, files: filesPayload },
+      const useMulti = multiAgentMode && shouldUseMultiAgent(content);
+      const functionName = useMulti ? 'multi-agent' : 'gemini-chat';
+      const mode = useMulti ? 'multi' : 'single';
+
+      if (useMulti) {
+        setAgentProgress('🤖 Agent 0 (Orchestrator) is planning...');
+      }
+
+      const { data, error } = await supabase.functions.invoke(functionName, {
+        body: { prompt: content, files: filesPayload, mode },
       });
 
       if (error) {
@@ -244,6 +278,7 @@ export function useCodeStore() {
       }
 
       const rawReply = data?.reply || 'Could not get a response.';
+      const agentLogs: AgentLog[] = data?.agentLogs || [];
       const { text, fileOps } = parseFileOperations(rawReply);
 
       if (fileOps.length > 0) {
@@ -256,6 +291,7 @@ export function useCodeStore() {
         content: text || (fileOps.length > 0 ? 'Changes applied! ✅' : rawReply),
         timestamp: new Date(),
         fileOps: fileOps.length > 0 ? fileOps : undefined,
+        agentLogs: agentLogs.length > 0 ? agentLogs : undefined,
       };
       setChatMessages((prev) => [...prev, aiMsg]);
     } catch {
@@ -268,8 +304,9 @@ export function useCodeStore() {
       setChatMessages((prev) => [...prev, aiMsg]);
     } finally {
       setIsAiLoading(false);
+      setAgentProgress(null);
     }
-  }, [applyFileOperations]);
+  }, [applyFileOperations, multiAgentMode]);
 
   const autoFixError = useCallback(async (errorDetails: { file: string; line: number | null; column: number | null; message: string; errorType: string; codeSnippet: string }, allFiles: CodeFile[]) => {
     let fixPrompt = `🔧 AUTO-FIX REQUEST\n\n`;
@@ -282,7 +319,6 @@ export function useCodeStore() {
       fixPrompt += `\n--- Code around the error ---\n${errorDetails.codeSnippet}\n--- End code context ---\n`;
     }
 
-    // Include the full content of the errored file for context
     if (errorDetails.file) {
       const errorFile = allFiles.find(f => f.name === errorDetails.file);
       if (errorFile) {
@@ -292,8 +328,12 @@ export function useCodeStore() {
 
     fixPrompt += `\nFix this ${errorDetails.errorType} error and return the full corrected files using [FILE:filename.ext] blocks. Focus on the specific error location. IMPORTANT: Do not escape normal code characters with markdown backslashes.`;
     
+    // Auto-fix always uses single agent mode
+    const prevMode = multiAgentMode;
+    setMultiAgentMode(false);
     await sendMessage(fixPrompt);
-  }, [sendMessage]);
+    setMultiAgentMode(prevMode);
+  }, [sendMessage, multiAgentMode]);
 
   return {
     files,
@@ -307,5 +347,8 @@ export function useCodeStore() {
     sendMessage,
     isAiLoading,
     autoFixError,
+    multiAgentMode,
+    setMultiAgentMode,
+    agentProgress,
   };
 }
