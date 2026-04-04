@@ -142,7 +142,7 @@ const IFRAME_RUNTIME = `
 
       var imps = [];
       // import Default, { named } from 'x'
-      code = code.replace(/import\\s+(\\w+)\\s*,\\s*\\{([^}]+)\\}\\s+from\\s+['"]([ ^'"]+)['"];?\\n?/g, function(_, d, n, s) {
+      code = code.replace(/import\\s+(\\w+)\\s*,\\s*\\{([^}]+)\\}\\s+from\\s+['"]([^'"]+)['"];?\\n?/g, function(_, d, n, s) {
         imps.push({t:"d",name:d,src:s}); imps.push({t:"n",names:n,src:s}); return "";
       });
       // import Default from 'x'
