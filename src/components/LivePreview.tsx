@@ -95,13 +95,24 @@ const IFRAME_RUNTIME = `
     }, "*");
   }
 
-  window.onerror = function(msg, src, lineNo) {
-    var file = "";
-    if (lineNo) {
-      reportError(file, String(msg));
-    } else {
-      reportError("", String(msg));
+  window.onerror = function(msg, src, lineNo, colNo, errObj) {
+    var message = String(msg);
+    // "Script error." is a generic cross-origin error with no useful info — skip it
+    if (message === "Script error." || message === "Script error") {
+      // Try to get real message from the error object
+      if (errObj && errObj.message) {
+        message = errObj.message;
+      } else {
+        return; // ignore completely — no useful info to report
+      }
     }
+    reportError("", message);
+  };
+
+  // Catch unhandled promise rejections too
+  window.onunhandledrejection = function(event) {
+    var msg = event.reason ? (event.reason.message || String(event.reason)) : "Unhandled promise rejection";
+    reportError("", msg);
   };
 
   function resolve(name) {
