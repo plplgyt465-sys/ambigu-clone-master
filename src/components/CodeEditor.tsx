@@ -4,9 +4,10 @@ interface CodeEditorProps {
   content: string;
   language: string;
   onChange: (content: string) => void;
+  errorLine?: number | null;
 }
 
-const CodeEditor = ({ content, onChange }: CodeEditorProps) => {
+const CodeEditor = ({ content, onChange, errorLine }: CodeEditorProps) => {
   const lines = content.split('\n');
 
   const handleChange = useCallback(
@@ -38,11 +39,26 @@ const CodeEditor = ({ content, onChange }: CodeEditorProps) => {
       {/* Line numbers */}
       <div className="flex flex-col items-end py-4 px-3 select-none bg-[hsl(var(--editor-bg))] border-r border-border min-w-[3rem]">
         {lines.map((_, i) => (
-          <span key={i} className="line-number text-xs leading-6 h-6">
+          <span
+            key={i}
+            className={`text-xs leading-6 h-6 ${
+              errorLine === i + 1
+                ? 'text-destructive font-bold bg-destructive/10 px-1 rounded'
+                : 'line-number'
+            }`}
+          >
             {i + 1}
           </span>
         ))}
       </div>
+
+      {/* Error highlight overlay */}
+      {errorLine && errorLine <= lines.length && (
+        <div
+          className="absolute left-12 right-0 h-6 bg-destructive/10 border-l-2 border-destructive pointer-events-none"
+          style={{ top: `${(errorLine - 1) * 24 + 16}px` }}
+        />
+      )}
 
       {/* Textarea */}
       <textarea
