@@ -1,5 +1,7 @@
-import { useState, useCallback } from 'react';
+import { useState, useCallback, useEffect } from 'react';
 import { supabase } from '@/integrations/supabase/client';
+import { useVersionControl } from './useVersionControl';
+import type { Dependency } from '@/components/DependencyManager';
 
 export interface CodeFile {
   id: string;
@@ -28,6 +30,7 @@ export interface ChatMessage {
   timestamp: Date;
   fileOps?: FileOperation[];
   agentLogs?: AgentLog[];
+  mode?: 'CREATE' | 'EDIT' | 'FIX';
 }
 
 const defaultAppTsx = `import React, { useState } from 'react';
@@ -149,7 +152,6 @@ function parseFileOperations(reply: string): { text: string; fileOps: FileOperat
   return { text, fileOps };
 }
 
-// Detect if a prompt is complex enough to warrant multi-agent mode
 function shouldUseMultiAgent(prompt: string): boolean {
   const multiAgentKeywords = [
     'create', 'build', 'make', 'أنشئ', 'اصنع', 'ابني',
@@ -164,12 +166,21 @@ function shouldUseMultiAgent(prompt: string): boolean {
   return matchCount >= 2;
 }
 
+function detectAIMode(prompt: string): 'CREATE' | 'EDIT' | 'FIX' {
+  const lower = prompt.toLowerCase();
+  if (lower.includes('fix') || lower.includes('error') || lower.includes('bug') || lower.includes('auto-fix') || lower.includes('إصلاح') || lower.includes('خطأ')) return 'FIX';
+  if (lower.includes('edit') || lower.includes('change') || lower.includes('modify') || lower.includes('update') || lower.includes('عدل') || lower.includes('غير')) return 'EDIT';
+  return 'CREATE';
+}
+
 export function useCodeStore() {
   const [files, setFiles] = useState<CodeFile[]>(defaultFiles);
   const [activeFileId, setActiveFileId] = useState(defaultFiles[0].id);
   const [isAiLoading, setIsAiLoading] = useState(false);
   const [multiAgentMode, setMultiAgentMode] = useState(true);
   const [agentProgress, setAgentProgress] = useState<string | null>(null);
+  const [errorLine, setErrorLine] = useState<{ file: string; line: number } | null>(null);
+  const [dependencies, setDependencies] = useState<Dependency[]>([]);
   const [chatMessages, setChatMessages] = useState<ChatMessage[]>([
     {
       id: '1',
@@ -178,6 +189,8 @@ export function useCodeStore() {
       timestamp: new Date(),
     },
   ]);
+
+  const versionControl = useVersionControl(defaultFiles);
 
   const activeFile = files.find((f) => f.id === activeFileId) || files[0];
 
@@ -208,6 +221,28 @@ export function useCodeStore() {
     },
     [activeFileId]
   );
+
+  const renameFile = useCallback((fileId: string, newName: string) => {
+    setFiles((prev) =>
+      prev.map((f) =>
+        f.id === fileId
+          ? { ...f, name: newName, language: getLanguageFromFilename(newName) }
+          : f
+      )
+    );
+  }, []);
+
+  const addDependency = useCallback((name: string, version = 'latest') => {
+    const cdnUrl = `https://esm.sh/${name}${version !== 'latest' ? '@' + version : ''}`;
+    setDependencies((prev) => {
+      if (prev.some((d) => d.name === name)) return prev;
+      return [...prev, { name, version, cdnUrl }];
+    });
+  }, []);
+
+  const removeDependency = useCallback((name: string) => {
+    setDependencies((prev) => prev.filter((d) => d.name !== name));
+  }, []);
 
   const applyFileOperations = useCallback((fileOps: FileOperation[]) => {
     setFiles((prev) => {
@@ -242,12 +277,55 @@ export function useCodeStore() {
     }
   }, []);
 
+  // Save version snapshot after AI changes
+  const saveSnapshot = useCallback((label: string) => {
+    setFiles((current) => {
+      versionControl.pushSnapshot(current, label);
+      return current;
+    });
+  }, [versionControl]);
+
+  const handleUndo = useCallback(() => {
+    const prev = versionControl.undo();
+    if (prev) {
+      setFiles(prev);
+      if (prev.length > 0) setActiveFileId(prev[0].id);
+    }
+  }, [versionControl]);
+
+  const handleRedo = useCallback(() => {
+    const next = versionControl.redo();
+    if (next) {
+      setFiles(next);
+      if (next.length > 0) setActiveFileId(next[0].id);
+    }
+  }, [versionControl]);
+
+  // Keyboard shortcuts for undo/redo
+  useEffect(() => {
+    const handler = (e: KeyboardEvent) => {
+      if ((e.ctrlKey || e.metaKey) && e.key === 'z') {
+        if (e.shiftKey) {
+          e.preventDefault();
+          handleRedo();
+        } else {
+          e.preventDefault();
+          handleUndo();
+        }
+      }
+    };
+    window.addEventListener('keydown', handler);
+    return () => window.removeEventListener('keydown', handler);
+  }, [handleUndo, handleRedo]);
+
   const sendMessage = useCallback(async (content: string) => {
+    const mode = detectAIMode(content);
     const userMsg: ChatMessage = {
       id: Date.now().toString(),
       role: 'user',
       content,
       timestamp: new Date(),
+      mode,
     };
     setChatMessages((prev) => [...prev, userMsg]);
     setIsAiLoading(true);
@@ -263,19 +341,17 @@ export function useCodeStore() {
 
       const useMulti = multiAgentMode && shouldUseMultiAgent(content);
       const functionName = useMulti ? 'multi-agent' : 'gemini-chat';
-      const mode = useMulti ? 'multi' : 'single';
+      const rpcMode = useMulti ? 'multi' : 'single';
 
       if (useMulti) {
         setAgentProgress('🤖 Agent 0 (Orchestrator) is planning...');
       }
 
       const { data, error } = await supabase.functions.invoke(functionName, {
-        body: { prompt: content, files: filesPayload, mode },
+        body: { prompt: content, files: filesPayload, mode: rpcMode },
       });
 
-      if (error) {
-        throw new Error('Connection error');
-      }
+      if (error) throw new Error('Connection error');
 
       const rawReply = data?.reply || 'Could not get a response.';
       const agentLogs: AgentLog[] = data?.agentLogs || [];
@@ -283,6 +359,9 @@ export function useCodeStore() {
 
       if (fileOps.length > 0) {
         applyFileOperations(fileOps);
+        // Push version snapshot
+        const label = mode === 'FIX' ? `Fix: ${content.slice(0, 30)}` : mode === 'EDIT' ? `Edit: ${content.slice(0, 30)}` : `Create: ${content.slice(0, 30)}`;
+        setTimeout(() => saveSnapshot(label), 100);
       }
 
       const aiMsg: ChatMessage = {
@@ -292,6 +371,7 @@ export function useCodeStore() {
         timestamp: new Date(),
         fileOps: fileOps.length > 0 ? fileOps : undefined,
         agentLogs: agentLogs.length > 0 ? agentLogs : undefined,
+        mode,
       };
       setChatMessages((prev) => [...prev, aiMsg]);
     } catch {
@@ -306,15 +386,19 @@ export function useCodeStore() {
       setIsAiLoading(false);
       setAgentProgress(null);
     }
-  }, [applyFileOperations, multiAgentMode]);
+  }, [applyFileOperations, multiAgentMode, saveSnapshot]);
 
   const autoFixError = useCallback(async (errorDetails: { file: string; line: number | null; column: number | null; message: string; errorType: string; codeSnippet: string }, allFiles: CodeFile[]) => {
+    if (errorDetails.file && errorDetails.line) {
+      setErrorLine({ file: errorDetails.file, line: errorDetails.line });
+    }
+
     let fixPrompt = `🔧 AUTO-FIX REQUEST\n\n`;
     fixPrompt += `❌ Error Type: ${errorDetails.errorType}\n`;
     if (errorDetails.file) fixPrompt += `📁 File: ${errorDetails.file}\n`;
     if (errorDetails.line) fixPrompt += `📍 Line: ${errorDetails.line}${errorDetails.column ? `, Column: ${errorDetails.column}` : ''}\n`;
     fixPrompt += `💬 Error Message: ${errorDetails.message}\n`;
-    
+
     if (errorDetails.codeSnippet) {
       fixPrompt += `\n--- Code around the error ---\n${errorDetails.codeSnippet}\n--- End code context ---\n`;
     }
@@ -327,12 +411,12 @@ export function useCodeStore() {
     }
 
     fixPrompt += `\nFix this ${errorDetails.errorType} error and return the full corrected files using [FILE:filename.ext] blocks. Focus on the specific error location. IMPORTANT: Do not escape normal code characters with markdown backslashes.`;
-    
-    // Auto-fix always uses single agent mode
+
     const prevMode = multiAgentMode;
     setMultiAgentMode(false);
     await sendMessage(fixPrompt);
     setMultiAgentMode(prevMode);
+    setErrorLine(null);
   }, [sendMessage, multiAgentMode]);
 
   return {
@@ -343,6 +427,7 @@ export function useCodeStore() {
     updateFileContent,
     addFile,
     deleteFile,
+    renameFile,
     chatMessages,
     sendMessage,
     isAiLoading,
@@ -350,5 +435,14 @@ export function useCodeStore() {
     multiAgentMode,
     setMultiAgentMode,
     agentProgress,
+    errorLine,
+    // Version control
+    versionControl,
+    handleUndo,
+    handleRedo,
+    // Dependencies
+    dependencies,
+    addDependency,
+    removeDependency,
   };
 }

@@ -1,10 +1,12 @@
-import { useState } from 'react';
-import { Code2, PanelLeftClose, PanelLeftOpen } from 'lucide-react';
+import { useState, useEffect } from 'react';
+import { Code2, PanelLeftClose, PanelLeftOpen, FolderTree } from 'lucide-react';
 import ChatPanel from '@/components/ChatPanel';
 import FileTabs from '@/components/FileTabs';
 import CodeEditor from '@/components/CodeEditor';
 import LivePreview from '@/components/LivePreview';
-import type { ErrorDetails } from '@/components/LivePreview';
+import FileExplorer from '@/components/FileExplorer';
+import DependencyManager from '@/components/DependencyManager';
+import VersionBar from '@/components/VersionBar';
 import { useCodeStore } from '@/hooks/useCodeStore';
 
 const Index = () => {
@@ -16,6 +18,7 @@ const Index = () => {
     updateFileContent,
     addFile,
     deleteFile,
+    renameFile,
     chatMessages,
     sendMessage,
     isAiLoading,
@@ -23,9 +26,20 @@ const Index = () => {
     multiAgentMode,
     setMultiAgentMode,
     agentProgress,
+    errorLine,
+    versionControl,
+    handleUndo,
+    handleRedo,
+    dependencies,
+    addDependency,
+    removeDependency,
   } = useCodeStore();
 
   const [chatOpen, setChatOpen] = useState(true);
+  const [explorerOpen, setExplorerOpen] = useState(true);
+
+  // Compute error line for current file
+  const currentErrorLine = errorLine && errorLine.file === activeFile.name ? errorLine.line : null;
 
   return (
     <div className="flex h-screen w-screen overflow-hidden bg-background">
@@ -54,6 +68,13 @@ const Index = () => {
           >
             {chatOpen ? <PanelLeftClose className="w-4 h-4" /> : <PanelLeftOpen className="w-4 h-4" />}
           </button>
+          <button
+            onClick={() => setExplorerOpen(!explorerOpen)}
+            className="p-1.5 rounded-md text-muted-foreground hover:text-foreground hover:bg-secondary transition-colors"
+            title={explorerOpen ? 'Hide explorer' : 'Show explorer'}
+          >
+            <FolderTree className="w-4 h-4" />
+          </button>
           <Code2 className="w-5 h-5 text-primary" />
           <span className="text-sm font-bold text-foreground tracking-tight">VibeCode</span>
           <span className="text-xs text-muted-foreground">Platform</span>
@@ -61,6 +82,25 @@ const Index = () => {
 
         {/* Editor + Preview */}
         <div className="flex-1 flex min-h-0">
+          {/* File Explorer */}
+          {explorerOpen && (
+            <div className="w-48 min-w-[180px] shrink-0 border-r border-border flex flex-col">
+              <FileExplorer
+                files={files}
+                activeFileId={activeFileId}
+                onSelectFile={setActiveFileId}
+                onAddFile={addFile}
+                onDeleteFile={deleteFile}
+                onRenameFile={renameFile}
+              />
+              <DependencyManager
+                dependencies={dependencies}
+                onAddDependency={addDependency}
+                onRemoveDependency={removeDependency}
+              />
+            </div>
+          )}
+
           {/* Editor */}
           <div className="flex-1 flex flex-col min-w-0 border-r border-border">
             <FileTabs
@@ -75,8 +115,17 @@ const Index = () => {
                 content={activeFile.content}
                 language={activeFile.language}
                 onChange={(c) => updateFileContent(activeFile.id, c)}
+                errorLine={currentErrorLine}
               />
             </div>
+            <VersionBar
+              canUndo={versionControl.canUndo}
+              canRedo={versionControl.canRedo}
+              onUndo={handleUndo}
+              onRedo={handleRedo}
+              history={versionControl.history}
+              currentIndex={versionControl.currentIndex}
+            />
           </div>
 
           {/* Preview */}
