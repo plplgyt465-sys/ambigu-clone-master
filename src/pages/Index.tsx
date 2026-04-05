@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useCallback } from 'react';
 import { Code2, PanelLeftClose, PanelLeftOpen, FolderTree } from 'lucide-react';
 import ChatPanel from '@/components/ChatPanel';
 import FileTabs from '@/components/FileTabs';
@@ -7,7 +7,10 @@ import LivePreview from '@/components/LivePreview';
 import FileExplorer from '@/components/FileExplorer';
 import DependencyManager from '@/components/DependencyManager';
 import VersionBar from '@/components/VersionBar';
+import ConsolePanel from '@/components/ConsolePanel';
 import { useCodeStore } from '@/hooks/useCodeStore';
+import { useStaticAnalysis } from '@/hooks/useStaticAnalysis';
+import type { ErrorDetails } from '@/components/LivePreview';
 
 const Index = () => {
   const {
@@ -37,9 +40,26 @@ const Index = () => {
 
   const [chatOpen, setChatOpen] = useState(true);
   const [explorerOpen, setExplorerOpen] = useState(true);
+  const [runtimeErrors, setRuntimeErrors] = useState<ErrorDetails[]>([]);
+
+  // Static analysis
+  const diagnostics = useStaticAnalysis(files);
 
   // Compute error line for current file
   const currentErrorLine = errorLine && errorLine.file === activeFile.name ? errorLine.line : null;
+
+  // Track runtime errors from preview
+  const handlePreviewError = useCallback((error: string) => {
+    // Runtime errors are tracked via message events in LivePreview
+  }, []);
+
+  // Navigate to error location
+  const handleGoToError = useCallback((fileName: string, line: number) => {
+    const file = files.find(f => f.name === fileName);
+    if (file) {
+      setActiveFileId(file.id);
+    }
+  }, [files, setActiveFileId]);
 
   return (
     <div className="flex h-screen w-screen overflow-hidden bg-background">
@@ -78,6 +98,20 @@ const Index = () => {
           <Code2 className="w-5 h-5 text-primary" />
           <span className="text-sm font-bold text-foreground tracking-tight">VibeCode</span>
           <span className="text-xs text-muted-foreground">Platform</span>
+          {diagnostics.length > 0 && (
+            <div className="ml-auto flex items-center gap-1 text-[10px]">
+              {diagnostics.filter(d => d.severity === 'error').length > 0 && (
+                <span className="px-1.5 py-0.5 rounded bg-destructive/20 text-destructive font-medium">
+                  {diagnostics.filter(d => d.severity === 'error').length} errors
+                </span>
+              )}
+              {diagnostics.filter(d => d.severity === 'warning').length > 0 && (
+                <span className="px-1.5 py-0.5 rounded bg-warning/20 text-warning font-medium">
+                  {diagnostics.filter(d => d.severity === 'warning').length} warnings
+                </span>
+              )}
+            </div>
+          )}
         </div>
 
         {/* Editor + Preview */}
@@ -125,6 +159,12 @@ const Index = () => {
               onRedo={handleRedo}
               history={versionControl.history}
               currentIndex={versionControl.currentIndex}
+            />
+            {/* Console / Problems Panel */}
+            <ConsolePanel
+              diagnostics={diagnostics}
+              runtimeErrors={runtimeErrors}
+              onGoToError={handleGoToError}
             />
           </div>
 

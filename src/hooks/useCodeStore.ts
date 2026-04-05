@@ -347,8 +347,14 @@ export function useCodeStore() {
         setAgentProgress('🤖 Agent 0 (Orchestrator) is planning...');
       }
 
+      // Send conversation history for context
+      const recentHistory = chatMessages.slice(-20).map(m => ({
+        role: m.role,
+        content: m.content,
+      }));
+
       const { data, error } = await supabase.functions.invoke(functionName, {
-        body: { prompt: content, files: filesPayload, mode: rpcMode },
+        body: { prompt: content, files: filesPayload, mode: rpcMode, history: recentHistory },
       });
 
       if (error) throw new Error('Connection error');
