@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState } from 'react';
 import { Code2, PanelLeftClose, PanelLeftOpen, FolderTree } from 'lucide-react';
 import ChatPanel from '@/components/ChatPanel';
 import FileTabs from '@/components/FileTabs';
